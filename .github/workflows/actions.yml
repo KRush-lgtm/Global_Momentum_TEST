@@ -27,7 +27,7 @@ jobs:
           pip install yfinance pandas openpyxl
 
       - name: Run Momentum Script
-        run: python streamlit_app.py
+        run: python momentum_ranking.py
 
       - name: Commit and Push index.html
         run: |
