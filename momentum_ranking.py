@@ -1,12 +1,14 @@
 import os
-from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
+from datetime import datetime, timedelta
 
 def main():
-    print("--- START DES CHUNK-SKRIPTS ---")
-    csv_path = "ticker.csv"
+    print("\n==========================================")
+    print("!!! START: KORRIGIERTER LIVE-RUN !!!")
+    print("==========================================\n")
     
+    csv_path = "ticker.csv"
     if not os.path.exists(csv_path):
         print(f"CRITICAL ERROR: '{csv_path}' fehlt!")
         return
@@ -15,7 +17,7 @@ def main():
     ticker_col = "Ticker" if "Ticker" in df_ticker.columns else df_ticker.columns[0]
     tickers = df_ticker[ticker_col].dropna().astype(str).str.strip().tolist()
     tickers = list(dict.fromkeys(tickers))
-    print(f"-> {len(tickers)} Ticker eingelesen.")
+    print(f"-> {len(tickers)} Ticker aus CSV eingelesen.")
 
     today = datetime.today()
     start_date = today - timedelta(days=380)
@@ -27,38 +29,48 @@ def main():
     }
 
     results = []
-    chunk_size = 50  # Verarbeite 50 Aktien pro Durchgang, um Abstürze zu verhindern
+    chunk_size = 50
     
-    print(f"-> Starte paketweisen Download (Größe: {chunk_size})...")
+    print(f"-> Starte paketweisen Download (Größe: {chunk_size})...\n")
     
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        print(f"   Verarbeite Paket {i//chunk_size + 1} (Ticker {i} bis {i+len(chunk)})...")
+        print(f"[Paket {i//chunk_size + 1}/{len(tickers)//chunk_size + 1}] Verarbeite Ticker {i} bis {i+len(chunk)}...")
         
         try:
-            # Download für das aktuelle Paket
-            raw_data = yf.download(chunk, start=start_date, end=today, group_by='ticker', progress=False, verbose=False)
+            raw_data = yf.download(chunk, start=start_date, end=today, progress=False)
         except Exception as e:
-            print(f"   Fehler bei Paket ab Ticker {i}: {e}")
+            print(f"   Fehler bei Paket-Download: {e}")
+            continue
+
+        adj_close_col = None
+        for col in ["Adj Close", "Adj. Close", "Close"]:
+            if col in raw_data.columns:
+                adj_close_col = col
+                break
+
+        if not adj_close_col:
             continue
 
         for ticker in chunk:
             try:
-                if len(chunk) > 1:
-                    if ticker not in raw_data.columns.levels[0]:
+                if isinstance(raw_data.columns, pd.MultiIndex):
+                    if ticker in raw_data[adj_close_col].columns:
+                        ticker_df = pd.DataFrame({"Price": raw_data[adj_close_col][ticker]}).dropna()
+                    else:
                         continue
-                    ticker_df = raw_data[ticker].dropna(subset=["Adj Close"])
                 else:
-                    ticker_df = raw_data.dropna(subset=["Adj Close"])
+                    ticker_df = pd.DataFrame({"Price": raw_data[adj_close_col]}).dropna()
 
                 if ticker_df.empty or len(ticker_df) < 10:
                     continue
 
-                end_price = ticker_df["Adj Close"].iloc[-1]
+                end_price = ticker_df["Price"].iloc[-1]
 
                 def get_historic_price(target_date):
-                    avail = ticker_df.index[ticker_df.index >= pd.Timestamp(target_date).date()]
-                    return ticker_df.loc[avail[0], "Adj Close"] if not avail.empty else None
+                    target_timestamp = pd.Timestamp(target_date)
+                    avail = ticker_df.index[ticker_df.index >= target_timestamp]
+                    return ticker_df.loc[avail[0], "Price"] if not avail.empty else None
 
                 p_1m = get_historic_price(periods["1M"])
                 p_3m = get_historic_price(periods["3M"])
@@ -85,7 +97,7 @@ def main():
             except:
                 continue
 
-    print(f"-> Berechnung fertig! {len(results)} gültige Ergebnisse erzielt.")
+    print(f"\n-> Berechnung fertig! {len(results)} Ergebnisse erzielt.")
 
     ranking_df = pd.DataFrame(results)
     if not ranking_df.empty:
@@ -94,19 +106,27 @@ def main():
     html_style = """
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
-        table { border-collapse: collapse; margin: 25px auto; font-size: 0.9em; min-width: 600px; background: #1e1e1e; }
-        th { background-color: #2d2d2d; color: white; padding: 12px 15px; }
-        td { padding: 12px 15px; border-bottom: 1px solid #333; }
-        tr:nth-of-type(even) { background-color: #1a1a1a; }
+        .momentum-table { border-collapse: collapse; margin: 25px auto; width: 95%; max-width: 1100px; font-size: 0.95em; background: #1e1e1e; box-shadow: 0 0 30px rgba(0,0,0,0.35); border-radius: 12px; overflow: hidden; }
+        .momentum-table thead { background: linear-gradient(90deg, #0a4f6c, #1f7a8c); }
+        .momentum-table th, .momentum-table td { padding: 14px 18px; border-bottom: 1px solid #2c2c2c; }
+        .momentum-table th { color: #f0f9ff; font-weight: 700; text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.08em; }
+        .momentum-table td { color: #e7e7e7; }
+        .momentum-table tbody tr:nth-of-type(odd) { background-color: #171717; }
+        .momentum-table tbody tr:nth-of-type(even) { background-color: #1f1f1f; }
+        .momentum-table tbody tr:hover { background-color: #2e5f7c; color: #fff; }
+        .momentum-table td:first-child { text-align: left; font-weight: 600; }
+        .momentum-table td:not(:first-child) { text-align: right; }
+        .momentum-table caption { caption-side: top; text-align: left; color: #99d0ff; padding: 12px 18px 0; font-size: 1em; }
+        .table-footer { margin-top: 12px; color: #b0c7d6; font-size: 0.92em; }
     </style>
     """
     
-    table_html = ranking_df.to_html(index=False)
-    full_html = f"<html><head>{html_style}</head><body><h1>📈 Global Momentum Leaderboard</h1><p>Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>{table_html}</body></html>"
+    table_html = ranking_df.to_html(index=False, border=0, classes='momentum-table')
+    full_html = f"<html><head><title>Momentum Ranking</title>{html_style}</head><body><h1>📈 Global Momentum Leaderboard</h1><p>Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>{table_html}</body></html>"
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(full_html)
-    print("!!! ERFOLG: index.html wurde erfolgreich erstellt !!!")
+    print("!!! ERFOLG: index.html ENTHÄLT JETZT ALLE LIVE-DATEN !!!\n")
 
 if __name__ == "__main__":
     main()
