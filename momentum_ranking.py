@@ -3,7 +3,103 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 
-def main():
+def get_ticker_name(ticker, ticker_names):
+    if ticker in ticker_names:
+        return ticker_names[ticker]
+
+    name = ""
+    try:
+        info = yf.Ticker(ticker).info
+        name = info.get("shortName") or info.get("longName") or ""
+    except Exception:
+        name = ""
+
+    ticker_names[ticker] = name
+    return name
+
+
+def get_price_on_or_after(ticker_df, target_date):
+    avail = ticker_df.index[ticker_df.index >= target_date]
+    return ticker_df.loc[avail[0], "Price"] if not avail.empty else None
+
+
+def get_price_on_or_before(ticker_df, target_date):
+    avail = ticker_df.index[ticker_df.index <= target_date]
+    return ticker_df.loc[avail[-1], "Price"] if not avail.empty else None
+
+
+def calculate_weighted_performance(tickers, ticker_names):
+    period1_start = pd.Timestamp("2024-12-31")
+    period1_end = pd.Timestamp("2025-06-30")
+    period2_start = pd.Timestamp("2025-06-30")
+    period2_end = pd.Timestamp("2026-12-31")
+
+    weight1 = 0.3333
+    weight2 = 0.6667
+
+    results = []
+    chunk_size = 50
+
+    print(f"-> Starte gewichtete Zeitraum-Analyse (Zeiträume: {period1_start.date()} - {period1_end.date()} und {period2_start.date()} - {period2_end.date()})...")
+
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i:i + chunk_size]
+
+        try:
+            raw_data = yf.download(chunk, start=period1_start, end=period2_end + timedelta(days=1), progress=False)
+        except Exception as e:
+            print(f"   Fehler bei Download: {e}")
+            continue
+
+        adj_close_col = None
+        for col in ["Adj Close", "Adj. Close", "Close"]:
+            if col in raw_data.columns:
+                adj_close_col = col
+                break
+
+        if not adj_close_col:
+            continue
+
+        for ticker in chunk:
+            try:
+                if isinstance(raw_data.columns, pd.MultiIndex):
+                    if ticker in raw_data[adj_close_col].columns:
+                        ticker_df = pd.DataFrame({"Price": raw_data[adj_close_col][ticker]}).dropna()
+                    else:
+                        continue
+                else:
+                    ticker_df = pd.DataFrame({"Price": raw_data[adj_close_col]}).dropna()
+
+                if ticker_df.empty or len(ticker_df) < 5:
+                    continue
+
+                p1_start = get_price_on_or_after(ticker_df, period1_start)
+                p1_end = get_price_on_or_before(ticker_df, period1_end)
+                p2_start = get_price_on_or_after(ticker_df, period2_start)
+                p2_end = get_price_on_or_before(ticker_df, period2_end)
+
+                if any(p is None for p in [p1_start, p1_end, p2_start, p2_end]):
+                    continue
+
+                ret1 = ((p1_end - p1_start) / p1_start) * 100
+                ret2 = ((p2_end - p2_start) / p2_start) * 100
+                weighted_score = (ret1 * weight1) + (ret2 * weight2)
+                ticker_name = ticker_names.get(ticker, "")
+
+                results.append({
+                    "Ticker": ticker,
+                    "Name": ticker_name,
+                    "31.12.24-30.06.25 (%)": round(ret1, 2),
+                    "30.06.25-31.12.26 (%)": round(ret2, 2),
+                    "Gewichteter Score": round(weighted_score, 2)
+                })
+            except Exception:
+                continue
+
+    return results
+
+
+def main(): 
     print("\n==========================================")
     print("!!! START: KORRIGIERTER LIVE-RUN !!!")
     print("==========================================\n")
@@ -31,20 +127,6 @@ def main():
     results = []
     ticker_names = {}
     chunk_size = 50
-    
-    def get_ticker_name(ticker):
-        if ticker in ticker_names:
-            return ticker_names[ticker]
-
-        name = ""
-        try:
-            info = yf.Ticker(ticker).info
-            name = info.get("shortName") or info.get("longName") or ""
-        except Exception:
-            name = ""
-
-        ticker_names[ticker] = name
-        return name
     
     print(f"-> Starte paketweisen Download (Größe: {chunk_size})...\n")
     
@@ -100,7 +182,7 @@ def main():
                 ret_6m = ((end_price - p_6m) / p_6m) * 100
                 ret_9m = ((end_price - p_9m) / p_9m) * 100
                 score = ret_1m + ret_3m + ret_6m + ret_9m
-                ticker_name = get_ticker_name(ticker)
+                ticker_name = get_ticker_name(ticker, ticker_names)
 
                 results.append({
                     "Ticker": ticker,
@@ -120,9 +202,20 @@ def main():
     if not ranking_df.empty:
         ranking_df = ranking_df.sort_values(by="Gesamt-Score", ascending=False)
 
+    weighted_results = calculate_weighted_performance(tickers, ticker_names)
+    weighted_df = pd.DataFrame(weighted_results)
+    if not weighted_df.empty:
+        weighted_df = weighted_df.sort_values(by="Gewichteter Score", ascending=False)
+
     html_style = """
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; justify-content: center; flex-wrap: wrap; }
+        .tab-button { padding: 12px 24px; background: #0a4f6c; color: #f0f9ff; border: none; cursor: pointer; border-radius: 8px; font-weight: 600; transition: background 0.3s; }
+        .tab-button.active { background: #1f7a8c; }
+        .tab-button:hover { background: #1f7a8c; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
         .momentum-table { border-collapse: collapse; margin: 25px auto; width: 95%; max-width: 1100px; font-size: 0.95em; background: #1e1e1e; box-shadow: 0 0 30px rgba(0,0,0,0.35); border-radius: 12px; overflow: hidden; }
         .momentum-table thead { background: linear-gradient(90deg, #0a4f6c, #1f7a8c); }
         .momentum-table th, .momentum-table td { padding: 14px 18px; border-bottom: 1px solid #2c2c2c; }
@@ -136,10 +229,39 @@ def main():
         .momentum-table caption { caption-side: top; text-align: left; color: #99d0ff; padding: 12px 18px 0; font-size: 1em; }
         .table-footer { margin-top: 12px; color: #b0c7d6; font-size: 0.92em; }
     </style>
+    <script>
+        function showTab(tabName, button) {
+            const tabs = document.querySelectorAll('.tab-content');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+
+            const buttons = document.querySelectorAll('.tab-button');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+        }
+    </script>
     """
-    
+
     table_html = ranking_df.to_html(index=False, border=0, classes='momentum-table')
-    full_html = f"<html><head><title>Momentum Ranking</title>{html_style}</head><body><h1>📈 Global Momentum Leaderboard</h1><p>Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>{table_html}</body></html>"
+    table_html_weighted = weighted_df.to_html(index=False, border=0, classes='momentum-table')
+    full_html = f"""<html><head><title>Momentum Ranking</title>{html_style}</head><body>
+    <h1>📈 Global Momentum Leaderboard</h1>
+    <p>Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
+    <div class=\"tabs\">
+        <button class=\"tab-button active\" onclick=\"showTab('tab-main', this)\">9-Monats Momentum</button>
+        <button class=\"tab-button\" onclick=\"showTab('tab-weighted', this)\">Gewichtete Zeiträume</button>
+    </div>
+    <div id=\"tab-main\" class=\"tab-content active\">
+        <h2>9-Monats Momentum Ranking</h2>
+        {table_html}
+    </div>
+    <div id=\"tab-weighted\" class=\"tab-content\">
+        <h2>Gewichtete Performance (2 Zeiträume)</h2>
+        <p>Zeitraum 1: 31.12.2024 - 30.06.2025 (Gewicht: 33,33%)</p>
+        <p>Zeitraum 2: 30.06.2025 - 31.12.2026 (Gewicht: 66,67%)</p>
+        {table_html_weighted}
+    </div>
+    </body></html>"""
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(full_html)
