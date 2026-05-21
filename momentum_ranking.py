@@ -5,12 +5,19 @@ import yfinance as yf
 
 
 def main():
-    # 1. Ticker einlesen
     csv_path = "ticker.csv"
     if not os.path.exists(csv_path):
-        print(f"Fehler: {csv_path} nicht gefunden.")
+        print(
+            f"FEHLER: '{csv_path}' wurde im Verzeichnis nicht gefunden! Bitte lade die CSV hoch."
+        )
+        # Erzeuge eine Fehler-HTML, damit wir sehen, was los ist
+        with open("index.html", "w", encoding="utf-8") as f:
+            f.write(
+                "<h1>Fehler: ticker.csv fehlt im Repository!</h1>"
+            )
         return
 
+    print("Lese Ticker ein...")
     df_ticker = pd.read_csv(csv_path)
     ticker_col = (
         "Ticker" if "Ticker" in df_ticker.columns else df_ticker.columns[0]
@@ -18,20 +25,26 @@ def main():
     tickers = df_ticker[ticker_col].dropna().astype(str).str.strip().tolist()
     tickers = list(dict.fromkeys(tickers))
 
-    # 2. Zeiträume bestimmen
+    print(f"{len(tickers)} Ticker gefunden. Starte Yahoo-Abruf...")
+
     today = datetime.today()
+    start_date = today - timedelta(days=380)
+
+    # Daten blockweise holen, um Timeouts zu vermeiden
+    try:
+        raw_data = yf.download(
+            tickers, start=start_date, end=today, group_by="ticker"
+        )
+    except Exception as e:
+        print(f"Fehler beim Yahoo-Download: {e}")
+        return
+
     periods = {
         "1M": today - timedelta(days=30),
         "3M": today - timedelta(days=91),
         "6M": today - timedelta(days=182),
         "9M": today - timedelta(days=273),
     }
-    start_date = min(periods.values()) - timedelta(days=10)
-
-    # 3. Daten abrufen
-    raw_data = yf.download(
-        tickers, start=start_date, end=today, group_by="ticker"
-    )
 
     results = []
     if len(tickers) == 1:
@@ -46,21 +59,25 @@ def main():
             else:
                 ticker_df = raw_data.dropna(subset=["Adj Close"])
 
-            if ticker_df.empty:
+            if ticker_df.empty or len(ticker_df) < 10:
                 continue
 
             end_price = ticker_df["Adj Close"].iloc[-1]
 
             def get_historic_price(target_date):
-                avail = ticker_df.index[ticker_df.index >= target_date]
-                return ticker_df.loc[avail[0], "Adj Close"] if not avail.empty else None
+                avail = ticker_df.index[
+                    ticker_df.index >= pd.Timestamp(target_date).date()
+                ]
+                return (
+                    ticker_df.loc[avail[0], "Adj Close"]
+                    if not avail.empty
+                    else None
+                )
 
-            p_1m, p_3m, p_6m, p_9m = (
-                get_historic_price(periods["1M"]),
-                get_historic_price(periods["3M"]),
-                get_historic_price(periods["6M"]),
-                get_historic_price(periods["9M"]),
-            )
+            p_1m = get_historic_price(periods["1M"])
+            p_3m = get_historic_price(periods["3M"])
+            p_6m = get_historic_price(periods["6M"])
+            p_9m = get_historic_price(periods["9M"])
 
             if any(p is None for p in [p_1m, p_3m, p_6m, p_9m]):
                 continue
@@ -84,59 +101,43 @@ def main():
         except:
             continue
 
-    if not results:
-        return
-
-    ranking_df = pd.DataFrame(results).sort_values(
-        by="Gesamt-Score", ascending=False
+    print(
+        f"Berechnung fertig. {len(results)} Aktien erfolgreich verarbeitet."
     )
 
-    # 4. Schönes HTML-Dashboard generieren (CSS für Darkmode & tabellarische Ansicht)
+    if not results:
+        print("Keine Ergebnisse generiert. Erzeuge leere Tabelle.")
+        ranking_df = pd.DataFrame(
+            columns=[
+                "Ticker",
+                "1M (%)",
+                "3M (%)",
+                "6M (%)",
+                "9M (%)",
+                "Gesamt-Score",
+            ]
+        )
+    else:
+        ranking_df = pd.DataFrame(results).sort_values(
+            by="Gesamt-Score", ascending=False
+        )
+
     html_style = """
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; }
-        h1 { color: #ffffff; text-align: center; }
-        .update-time { text-align: center; color: #888; margin-bottom: 30px; }
-        table { border-collapse: collapse; margin: 25px auto; font-size: 0.9em; min-width: 400px; box-shadow: 0 0 20px rgba(0, 0, 0, 0.15); border-radius: 8px; overflow: hidden; }
-        th { background-color: #1f1f1f; color: #ffffff; text-align: left; font-weight: bold; padding: 12px 15px; border-bottom: 2px solid #333; }
-        td { padding: 12px 15px; border-bottom: 1px solid #222; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
+        table { border-collapse: collapse; margin: 25px auto; font-size: 0.9em; min-width: 600px; background: #1e1e1e; }
+        th { background-color: #2d2d2d; color: white; padding: 12px 15px; }
+        td { padding: 12px 15px; border-bottom: 1px solid #333; }
         tr:nth-of-type(even) { background-color: #1a1a1a; }
-        tr:hover { background-color: #252525; }
-        .pos { color: #4caf50; font-weight: bold; }
-        .neg { color: #f44336; font-weight: bold; }
     </style>
     """
 
-    # Erzeuge die reine HTML-Tabelle aus Pandas
-    table_html = ranking_df.to_html(index=False, classes="gtaa-table")
+    table_html = ranking_df.to_html(index=False)
+    full_html = f"<html><head>{html_style}</head><body><h1>📈 Global Momentum Leaderboard</h1><p>Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>{table_html}</body></html>"
 
-    # Farbliche Formatierung für positive/negative Werte hinzufügen
-    table_html = table_html.replace("<td>-", '<td class="neg">-').replace(
-        "<td>", '<td class="pos">'
-    )
-    table_html = table_html.replace(
-        '<td class="pos">' + "Ticker" if "Ticker" in table_html else "",
-        "<td>",
-    )  # Ticker-Spalte neutral lassen
-
-    # Finale HTML-Seite zusammensetzen
-    full_html = f"""<!DOCTYPE html>
-    <html>
-    <head>
-        <title>Momentum Dashboard</title>
-        {html_style}
-    </head>
-    <body>
-        <h1>📈 Global Momentum Leaderboard</h1>
-        <div class="update-time">Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</div>
-        {table_html}
-    </body>
-    </html>
-    """
-
-    # Als index.html abspeichern (Wichtig für GitHub Pages)
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(full_html)
+    print("index.html wurde ERFOLGREICH geschrieben!")
 
 
 if __name__ == "__main__":
