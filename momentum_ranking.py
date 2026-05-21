@@ -1,3 +1,4 @@
+cat << 'EOF' > momentum_ranking.py
 import os
 import pandas as pd
 import yfinance as yf
@@ -5,7 +6,7 @@ from datetime import datetime, timedelta
 
 def main():
     print("\n==========================================")
-    print("!!! START: KORRIGIERTER LIVE-RUN !!!")
+    print("!!! START: LIVE-RUN MIT AKTIENNAMEN !!!")
     print("==========================================\n")
     
     csv_path = "ticker.csv"
@@ -86,8 +87,16 @@ def main():
                 ret_9m = ((end_price - p_9m) / p_9m) * 100
                 score = ret_1m + ret_3m + ret_6m + ret_9m
 
+                # Hier holen wir den echten Firmennamen ab
+                try:
+                    yf_ticker_obj = yf.Ticker(ticker)
+                    company_name = yf_ticker_obj.info.get('longName', ticker)
+                except:
+                    company_name = ticker # Fallback falls Yahoo blockiert
+
                 results.append({
                     "Ticker": ticker,
+                    "Name": company_name,
                     "1M (%)": round(ret_1m, 2),
                     "3M (%)": round(ret_3m, 2),
                     "6M (%)": round(ret_6m, 2),
@@ -101,23 +110,26 @@ def main():
 
     ranking_df = pd.DataFrame(results)
     if not ranking_df.empty:
+        # Sortieren und Spaltenreihenfolge fixieren, damit Name direkt neben dem Ticker steht
         ranking_df = ranking_df.sort_values(by="Gesamt-Score", ascending=False)
+        cols = ["Ticker", "Name", "1M (%)", "3M (%)", "6M (%)", "9M (%)", "Gesamt-Score"]
+        ranking_df = ranking_df[cols]
 
     html_style = """
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
-        .momentum-table { border-collapse: collapse; margin: 25px auto; width: 95%; max-width: 1100px; font-size: 0.95em; background: #1e1e1e; box-shadow: 0 0 30px rgba(0,0,0,0.35); border-radius: 12px; overflow: hidden; }
+        .momentum-table { border-collapse: collapse; margin: 25px auto; width: 95%; max-width: 1200px; font-size: 0.95em; background: #1e1e1e; box-shadow: 0 0 30px rgba(0,0,0,0.35); border-radius: 12px; overflow: hidden; }
         .momentum-table thead { background: linear-gradient(90deg, #0a4f6c, #1f7a8c); }
         .momentum-table th, .momentum-table td { padding: 14px 18px; border-bottom: 1px solid #2c2c2c; }
-        .momentum-table th { color: #f0f9ff; font-weight: 700; text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.08em; }
-        .momentum-table td { color: #e7e7e7; }
+        .momentum-table th { color: #f0f9ff; font-weight: 700; text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.08em; text-align: center; }
+        .momentum-table td { color: #e7e7e7; text-align: center; }
         .momentum-table tbody tr:nth-of-type(odd) { background-color: #171717; }
         .momentum-table tbody tr:nth-of-type(even) { background-color: #1f1f1f; }
         .momentum-table tbody tr:hover { background-color: #2e5f7c; color: #fff; }
-        .momentum-table td:first-child { text-align: left; font-weight: 600; }
-        .momentum-table td:not(:first-child) { text-align: right; }
-        .momentum-table caption { caption-side: top; text-align: left; color: #99d0ff; padding: 12px 18px 0; font-size: 1em; }
-        .table-footer { margin-top: 12px; color: #b0c7d6; font-size: 0.92em; }
+        
+        /* Ticker und Name linksbündig ausrichten */
+        .momentum-table td:nth-child(1), .momentum-table td:nth-child(2) { text-align: left; font-weight: 600; }
+        .momentum-table td:nth-child(2) { font-weight: 400; color: #b0c7d6; } /* Name etwas dezenter */
     </style>
     """
     
@@ -126,7 +138,8 @@ def main():
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(full_html)
-    print("!!! ERFOLG: index.html ENTHÄLT JETZT ALLE LIVE-DATEN !!!\n")
+    print("!!! ERFOLG: index.html ENTHÄLT JETZT ALLE LIVE-DATEN INKLUSIVE AKTIENNAMEN !!!\n")
 
 if __name__ == "__main__":
     main()
+EOF
