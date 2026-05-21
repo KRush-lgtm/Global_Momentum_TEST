@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -38,6 +39,7 @@ def calculate_weighted_performance(tickers, ticker_names):
     weight2 = 0.6667
 
     results = []
+    price_history = {}
     chunk_size = 50
 
     print(f"-> Starte gewichtete Zeitraum-Analyse (Zeiträume: {period1_start.date()} - {period1_end.date()} und {period2_start.date()} - {period2_end.date()})...")
@@ -73,6 +75,10 @@ def calculate_weighted_performance(tickers, ticker_names):
                 if ticker_df.empty or len(ticker_df) < 5:
                     continue
 
+                dates = [d.strftime("%Y-%m-%d") for d in ticker_df.index]
+                prices = [float(p) for p in ticker_df["Price"].tolist()]
+                price_history[ticker] = {"dates": dates, "prices": prices}
+
                 p1_start = get_price_on_or_after(ticker_df, period1_start)
                 p1_end = get_price_on_or_before(ticker_df, period1_end)
                 p2_start = get_price_on_or_after(ticker_df, period2_start)
@@ -96,7 +102,7 @@ def calculate_weighted_performance(tickers, ticker_names):
             except Exception:
                 continue
 
-    return results
+    return results, price_history
 
 
 def main(): 
@@ -202,11 +208,12 @@ def main():
     if not ranking_df.empty:
         ranking_df = ranking_df.sort_values(by="Gesamt-Score", ascending=False)
 
-    weighted_results = calculate_weighted_performance(tickers, ticker_names)
+    weighted_results, price_data = calculate_weighted_performance(tickers, ticker_names)
     weighted_df = pd.DataFrame(weighted_results)
     if not weighted_df.empty:
         weighted_df = weighted_df.sort_values(by="Gewichteter Score", ascending=False)
 
+    price_data_json = json.dumps(price_data, ensure_ascii=False)
     html_style = """
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
@@ -230,6 +237,7 @@ def main():
         .table-footer { margin-top: 12px; color: #b0c7d6; font-size: 0.92em; }
     </style>
     <script>
+        const priceData = JSON.parse(`{price_data_json}`);
         function showTab(tabName, button) {
             const tabs = document.querySelectorAll('.tab-content');
             tabs.forEach(tab => tab.classList.remove('active'));
@@ -239,11 +247,89 @@ def main():
             buttons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
         }
+
+        function getFirstAvailablePriceOnOrAfter(ticker, targetDate) {
+            const history = priceData[ticker];
+            if (!history) return null;
+            const filtered = history.filter(row => row.date >= targetDate);
+            return filtered.length ? filtered[0].close : null;
+        }
+
+        function getLastAvailablePriceOnOrBefore(ticker, targetDate) {
+            const history = priceData[ticker];
+            if (!history) return null;
+            const filtered = history.filter(row => row.date <= targetDate);
+            return filtered.length ? filtered[filtered.length - 1].close : null;
+        }
+
+        function safePercentChange(startPrice, endPrice) {
+            if (startPrice === null || endPrice === null || startPrice === 0) return null;
+            return ((endPrice / startPrice) - 1) * 100;
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            buildDynamicWeightedTable();
+        });
+
+        function buildDynamicWeightedTable() {
+            const period1Start = document.getElementById('period1_start').value;
+            const period1End = document.getElementById('period1_end').value;
+            const period2Start = document.getElementById('period2_start').value;
+            const period2End = document.getElementById('period2_end').value;
+            const weight1 = parseFloat(document.getElementById('weight1').value) || 0;
+            const weight2 = parseFloat(document.getElementById('weight2').value) || 0;
+            const output = document.getElementById('dynamic-weighted-output');
+            const rows = [];
+
+            output.innerHTML = '';
+            if (!period1Start || !period1End || !period2Start || !period2End) {
+                output.innerHTML = '<p style="color:#ff8080;">Bitte alle Datumsfelder ausfüllen.</p>';
+                return;
+            }
+
+            Object.keys(priceData).forEach(ticker => {
+                const price1Start = getFirstAvailablePriceOnOrAfter(ticker, period1Start);
+                const price1End = getLastAvailablePriceOnOrBefore(ticker, period1End);
+                const price2Start = getFirstAvailablePriceOnOrAfter(ticker, period2Start);
+                const price2End = getLastAvailablePriceOnOrBefore(ticker, period2End);
+
+                const perf1 = safePercentChange(price1Start, price1End);
+                const perf2 = safePercentChange(price2Start, price2End);
+                const weighted = perf1 !== null && perf2 !== null ? (perf1 * weight1 + perf2 * weight2) : null;
+
+                rows.push({
+                    ticker,
+                    perf1,
+                    perf2,
+                    weighted
+                });
+            });
+
+            rows.sort((a, b) => (b.weighted || -Infinity) - (a.weighted || -Infinity));
+
+            let html = '<table class="momentum-table">';
+            html += '<thead><tr><th>Ticker</th><th>Period 1 (%)</th><th>Period 2 (%)</th><th>Gewichtet (%)</th></tr></thead><tbody>';
+            rows.forEach(row => {
+                const perf1Text = row.perf1 !== null ? row.perf1.toFixed(2) + '%' : 'n/a';
+                const perf2Text = row.perf2 !== null ? row.perf2.toFixed(2) + '%' : 'n/a';
+                const weightedText = row.weighted !== null ? row.weighted.toFixed(2) + '%' : 'n/a';
+                html += `<tr><td>${row.ticker}</td><td>${perf1Text}</td><td>${perf2Text}</td><td>${weightedText}</td></tr>`;
+            });
+            html += '</tbody></table>';
+            output.innerHTML = html;
+        }
     </script>
     """
+    html_style = html_style.replace("{price_data_json}", price_data_json)
+    if 'ranking_df' in locals() and not ranking_df.empty:
+        table_html = ranking_df.to_html(index=False, border=0, classes='momentum-table')
+    else:
+        table_html = '<p style="color:#ff8080;">Keine Momentum-Ergebnisse vorhanden.</p>'
 
-    table_html = ranking_df.to_html(index=False, border=0, classes='momentum-table')
-    table_html_weighted = weighted_df.to_html(index=False, border=0, classes='momentum-table')
+    if 'weighted_df' in locals() and not weighted_df.empty:
+        table_html_weighted = weighted_df.to_html(index=False, border=0, classes='momentum-table')
+    else:
+        table_html_weighted = '<p style="color:#ff8080;">Keine gewichteten Ergebnisse vorhanden.</p>'
     full_html = f"""<html><head><title>Momentum Ranking</title>{html_style}</head><body>
     <h1>📈 Global Momentum Leaderboard</h1>
     <p>Letztes Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
@@ -257,9 +343,21 @@ def main():
     </div>
     <div id=\"tab-weighted\" class=\"tab-content\">
         <h2>Gewichtete Performance (2 Zeiträume)</h2>
-        <p>Zeitraum 1: 31.12.2024 - 30.06.2025 (Gewicht: 33,33%)</p>
-        <p>Zeitraum 2: 30.06.2025 - 31.12.2026 (Gewicht: 66,67%)</p>
+        <div style=\"max-width: 1100px; margin: 0 auto 20px; text-align: left;\">
+            <div style=\"display:flex; flex-wrap:wrap; gap:12px; align-items:center;\">
+                <label>Start 1: <input id=\"period1_start\" type=\"date\" value=\"2024-12-31\"></label>
+                <label>Ende 1: <input id=\"period1_end\" type=\"date\" value=\"2025-06-30\"></label>
+                <label>Start 2: <input id=\"period2_start\" type=\"date\" value=\"2025-06-30\"></label>
+                <label>Ende 2: <input id=\"period2_end\" type=\"date\" value=\"2026-12-31\"></label>
+                <label>Gewicht 1: <input id=\"weight1\" type=\"number\" step=\"0.0001\" min=\"0\" max=\"1\" value=\"0.3333\"></label>
+                <label>Gewicht 2: <input id=\"weight2\" type=\"number\" step=\"0.0001\" min=\"0\" max=\"1\" value=\"0.6667\"></label>
+                <button class=\"tab-button\" style=\"margin-left:auto;\" onclick=\"buildDynamicWeightedTable()\">Neu berechnen</button>
+            </div>
+            <p style=\"margin-top:12px; color:#b0c7d6; font-size:0.95em;\">Wähle frei Deine Zeiträume und berechne die gewichtete Performance dynamisch im Browser.</p>
+        </div>
         {table_html_weighted}
+        <h3>Interaktive Berechnung</h3>
+        <div id=\"dynamic-weighted-output\"></div>
     </div>
     </body></html>"""
 
