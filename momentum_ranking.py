@@ -91,6 +91,8 @@ def calculate_weighted_performance(tickers, ticker_names):
                 ret2 = ((p2_end - p2_start) / p2_start) * 100
                 weighted_score = (ret1 * weight1) + (ret2 * weight2)
                 ticker_name = ticker_names.get(ticker, "")
+                if not ticker_name:
+                    ticker_name = get_ticker_name(ticker, ticker_names)
 
                 results.append({
                     "Ticker": ticker,
@@ -105,7 +107,7 @@ def calculate_weighted_performance(tickers, ticker_names):
     return results, price_history
 
 
-def main(): 
+def main():
     print("\n==========================================")
     print("!!! START: KORRIGIERTER LIVE-RUN !!!")
     print("==========================================\n")
@@ -214,7 +216,8 @@ def main():
         weighted_df = weighted_df.sort_values(by="Gewichteter Score", ascending=False)
 
     price_data_json = json.dumps(price_data, ensure_ascii=False)
-    html_style = """
+    ticker_names_json = json.dumps(ticker_names, ensure_ascii=False)
+    html_style = '''
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
         .tabs { display: flex; gap: 10px; margin-bottom: 20px; justify-content: center; flex-wrap: wrap; }
@@ -238,6 +241,8 @@ def main():
     </style>
     <script>
         const priceData = JSON.parse(`{price_data_json}`);
+        const tickerNames = JSON.parse(`{ticker_names_json}`);
+
         function showTab(tabName, button) {
             const tabs = document.querySelectorAll('.tab-content');
             tabs.forEach(tab => tab.classList.remove('active'));
@@ -251,15 +256,23 @@ def main():
         function getFirstAvailablePriceOnOrAfter(ticker, targetDate) {
             const history = priceData[ticker];
             if (!history) return null;
-            const filtered = history.filter(row => row.date >= targetDate);
-            return filtered.length ? filtered[0].close : null;
+            for (let i = 0; i < history.dates.length; i++) {
+                if (history.dates[i] >= targetDate) {
+                    return history.prices[i];
+                }
+            }
+            return null;
         }
 
         function getLastAvailablePriceOnOrBefore(ticker, targetDate) {
             const history = priceData[ticker];
             if (!history) return null;
-            const filtered = history.filter(row => row.date <= targetDate);
-            return filtered.length ? filtered[filtered.length - 1].close : null;
+            for (let i = history.dates.length - 1; i >= 0; i--) {
+                if (history.dates[i] <= targetDate) {
+                    return history.prices[i];
+                }
+            }
+            return null;
         }
 
         function safePercentChange(startPrice, endPrice) {
@@ -299,6 +312,7 @@ def main():
 
                 rows.push({
                     ticker,
+                    name: tickerNames[ticker] || '',
                     perf1,
                     perf2,
                     weighted
@@ -308,19 +322,21 @@ def main():
             rows.sort((a, b) => (b.weighted || -Infinity) - (a.weighted || -Infinity));
 
             let html = '<table class="momentum-table">';
-            html += '<thead><tr><th>Ticker</th><th>Period 1 (%)</th><th>Period 2 (%)</th><th>Gewichtet (%)</th></tr></thead><tbody>';
+            html += '<thead><tr><th>Ticker</th><th>Name</th><th>Period 1 (%)</th><th>Period 2 (%)</th><th>Gewichtet (%)</th></tr></thead><tbody>';
             rows.forEach(row => {
                 const perf1Text = row.perf1 !== null ? row.perf1.toFixed(2) + '%' : 'n/a';
                 const perf2Text = row.perf2 !== null ? row.perf2.toFixed(2) + '%' : 'n/a';
                 const weightedText = row.weighted !== null ? row.weighted.toFixed(2) + '%' : 'n/a';
-                html += `<tr><td>${row.ticker}</td><td>${perf1Text}</td><td>${perf2Text}</td><td>${weightedText}</td></tr>`;
+                const nameText = row.name ? row.name : 'n/a';
+                html += `<tr><td>${row.ticker}</td><td>${nameText}</td><td>${perf1Text}</td><td>${perf2Text}</td><td>${weightedText}</td></tr>`;
             });
             html += '</tbody></table>';
             output.innerHTML = html;
         }
     </script>
-    """
-    html_style = html_style.replace("{price_data_json}", price_data_json)
+    '''
+    html_style = html_style.replace('{price_data_json}', price_data_json)
+    html_style = html_style.replace('{ticker_names_json}', ticker_names_json)
     if 'ranking_df' in locals() and not ranking_df.empty:
         table_html = ranking_df.to_html(index=False, border=0, classes='momentum-table')
     else:
