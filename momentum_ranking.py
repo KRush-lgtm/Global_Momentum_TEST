@@ -215,8 +215,8 @@ def main():
     if not weighted_df.empty:
         weighted_df = weighted_df.sort_values(by="Gewichteter Score", ascending=False)
 
-    price_data_json = json.dumps(price_data, ensure_ascii=False)
-    ticker_names_json = json.dumps(ticker_names, ensure_ascii=False)
+    price_data_json = json.dumps(price_data, ensure_ascii=False).replace('</script>', '<\\/script>')
+    ticker_names_json = json.dumps(ticker_names, ensure_ascii=False).replace('</script>', '<\\/script>')
     html_style = '''
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #121212; color: #e0e0e0; padding: 40px; text-align: center; }
@@ -239,9 +239,11 @@ def main():
         .momentum-table caption { caption-side: top; text-align: left; color: #99d0ff; padding: 12px 18px 0; font-size: 1em; }
         .table-footer { margin-top: 12px; color: #b0c7d6; font-size: 0.92em; }
     </style>
+    <script type="application/json" id="price-data">{price_data_json}</script>
+    <script type="application/json" id="ticker-names">{ticker_names_json}</script>
     <script>
-        const priceData = JSON.parse(`{price_data_json}`);
-        const tickerNames = JSON.parse(`{ticker_names_json}`);
+        const priceData = JSON.parse(document.getElementById('price-data').textContent || '{}');
+        const tickerNames = JSON.parse(document.getElementById('ticker-names').textContent || '{}');
 
         function showTab(tabName, button) {
             const tabs = document.querySelectorAll('.tab-content');
@@ -281,6 +283,14 @@ def main():
         }
 
         window.addEventListener('DOMContentLoaded', () => {
+            const inputIds = ['period1_start', 'period1_end', 'period2_start', 'period2_end', 'weight1', 'weight2'];
+            inputIds.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener('change', buildDynamicWeightedTable);
+                    element.addEventListener('input', buildDynamicWeightedTable);
+                }
+            });
             buildDynamicWeightedTable();
         });
 
@@ -319,11 +329,17 @@ def main():
                 });
             });
 
-            rows.sort((a, b) => (b.weighted || -Infinity) - (a.weighted || -Infinity));
+            const validRows = rows.filter(row => row.perf1 !== null && row.perf2 !== null);
+            if (validRows.length === 0) {
+                output.innerHTML = '<p style="color:#ff8080;">Keine gültigen Daten für den gewählten Zeitraum gefunden.</p>';
+                return;
+            }
+
+            validRows.sort((a, b) => (b.weighted || -Infinity) - (a.weighted || -Infinity));
 
             let html = '<table class="momentum-table">';
             html += '<thead><tr><th>Ticker</th><th>Name</th><th>Period 1 (%)</th><th>Period 2 (%)</th><th>Gewichtet (%)</th></tr></thead><tbody>';
-            rows.forEach(row => {
+            validRows.forEach(row => {
                 const perf1Text = row.perf1 !== null ? row.perf1.toFixed(2) + '%' : 'n/a';
                 const perf2Text = row.perf2 !== null ? row.perf2.toFixed(2) + '%' : 'n/a';
                 const weightedText = row.weighted !== null ? row.weighted.toFixed(2) + '%' : 'n/a';
@@ -371,9 +387,10 @@ def main():
             </div>
             <p style=\"margin-top:12px; color:#b0c7d6; font-size:0.95em;\">Wähle frei Deine Zeiträume und berechne die gewichtete Performance dynamisch im Browser.</p>
         </div>
-        {table_html_weighted}
         <h3>Interaktive Berechnung</h3>
         <div id=\"dynamic-weighted-output\"></div>
+        <h3 style=\"margin-top:32px;\">Vorberechnete Standardwerte</h3>
+        {table_html_weighted}
     </div>
     </body></html>"""
 
