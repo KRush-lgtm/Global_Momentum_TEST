@@ -143,7 +143,7 @@ def main():
         print(f"[Paket {i//chunk_size + 1}/{len(tickers)//chunk_size + 1}] Verarbeite Ticker {i} bis {i+len(chunk)}...")
         
         try:
-            raw_data = yf.download(chunk, start=start_date, end=today, progress=False)
+            raw_data = yf.download(chunk, start=start_date, end=today, progress=False, timeout=30)
         except Exception as e:
             print(f"   Fehler bei Paket-Download: {e}")
             continue
